@@ -1,6 +1,6 @@
 import json
-import multiprocessing as mp
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from collections import defaultdict
 
@@ -166,20 +166,20 @@ class LangMemManager:
             return result
 
         # Use multiprocessing to process conversations in parallel
-        with mp.Pool(processes=10) as pool:
-            results = list(
-                tqdm(
-                    pool.imap(process_conversation, list(self.data.items())),
-                    total=len(self.data),
-                    desc="Processing conversations",
-                )
-            )
+        # Use threads instead of processes (no pickling issues, great for I/O/API bound work)
+        futures = []
+        results = []
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for item in self.data.items():
+                futures.append(ex.submit(process_conversation, item))
+            for fut in tqdm(as_completed(futures), total=len(futures), desc="Processing conversations"):
+                results.append(fut.result())
 
-        # Combine results from all workers
-        for result in results:
-            for key, items in result.items():
-                OUTPUT[key].extend(items)
+                # Combine results from all workers
+                for result in results:
+                    for key, items in result.items():
+                        OUTPUT[key].extend(items)
 
-        # Save final results
-        with open(output_file_path, "w") as f:
-            json.dump(OUTPUT, f, indent=4)
+                # Save final results
+                with open(output_file_path, "w") as f:
+                    json.dump(OUTPUT, f, indent=4)
