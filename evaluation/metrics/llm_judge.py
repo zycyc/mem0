@@ -1,13 +1,21 @@
 import argparse
 import json
+import os
 from collections import defaultdict
 
 import numpy as np
+from dotenv import load_dotenv
 from openai import OpenAI
 
 from mem0.memory.utils import extract_json
 
-client = OpenAI()
+load_dotenv()
+
+# Configure OpenAI client to use local vLLM server
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", "token-abc123")
+
+client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 
 ACCURACY_PROMPT = """
 Your task is to label an answer to a question as ’CORRECT’ or ’WRONG’. You will be given the following data:
@@ -39,7 +47,7 @@ Just return the label CORRECT or WRONG in a json format with the key as "label".
 def evaluate_llm_judge(question, gold_answer, generated_answer):
     """Evaluate the generated answer against the gold answer using an LLM judge."""
     response = client.chat.completions.create(
-        model="gpt-4o-mini",
+        model=os.getenv("MODEL"),
         messages=[
             {
                 "role": "user",

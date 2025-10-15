@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -14,20 +15,21 @@ from mem0 import MemoryClient
 
 load_dotenv()
 
+# Configure OpenAI client to use local vLLM server
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", "token-abc123")
+
 
 class MemorySearch:
-    def __init__(self, output_path="results.json", top_k=10, filter_memories=False, is_graph=False):
-        self.mem0_client = MemoryClient(
-            api_key=os.getenv("MEM0_API_KEY"),
-            org_id=os.getenv("MEM0_ORGANIZATION_ID"),
-            project_id=os.getenv("MEM0_PROJECT_ID"),
-        )
+    def __init__(self, output_path="mem0_results.json", top_k=10, filter_memories=False, is_graph=False):
+        self.mem0_client = MemoryClient(api_key=os.getenv("MEM0_API_KEY"))
         self.top_k = top_k
-        self.openai_client = OpenAI()
+        self.openai_client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
         self.results = defaultdict(list)
         self.output_path = output_path
         self.filter_memories = filter_memories
         self.is_graph = is_graph
+        self._save_lock = threading.Lock()  # Lock for thread-safe file writes
 
         if self.is_graph:
             self.ANSWER_PROMPT = ANSWER_PROMPT_GRAPH
@@ -126,7 +128,7 @@ class MemorySearch:
             response_time,
         )
 
-    def process_question(self, val, speaker_a_user_id, speaker_b_user_id):
+    def process_question(self, val, speaker_a_user_id, speaker_b_user_id, save_after=True):
         question = val.get("question", "")
         answer = val.get("answer", "")
         category = val.get("category", -1)
@@ -162,13 +164,22 @@ class MemorySearch:
             "response_time": response_time,
         }
 
-        # Save results after each question is processed
-        with open(self.output_path, "w") as f:
-            json.dump(self.results, f, indent=4)
+        # Save results after each question is processed (only if save_after is True)
+        if save_after:
+            with self._save_lock:
+                with open(self.output_path, "w") as f:
+                    json.dump(self.results, f, indent=4)
 
         return result
 
-    def process_data_file(self, file_path):
+    def process_data_file(self, file_path, max_workers=1):
+        """Process all conversations from a data file.
+
+        Args:
+            file_path: Path to the JSON data file
+            max_workers: Number of parallel workers for question processing.
+                        If 1, processes sequentially. If >1, uses parallel processing.
+        """
         with open(file_path, "r") as f:
             data = json.load(f)
 
@@ -181,35 +192,48 @@ class MemorySearch:
             speaker_a_user_id = f"{speaker_a}_{idx}"
             speaker_b_user_id = f"{speaker_b}_{idx}"
 
-            for question_item in tqdm(
-                qa, total=len(qa), desc=f"Processing questions for conversation {idx}", leave=False
-            ):
-                result = self.process_question(question_item, speaker_a_user_id, speaker_b_user_id)
-                self.results[idx].append(result)
+            if max_workers > 1:
+                # Use parallel processing
+                self.process_questions_parallel(idx, qa, speaker_a_user_id, speaker_b_user_id, max_workers)
+            else:
+                # Sequential processing (original behavior)
+                for question_item in tqdm(
+                    qa, total=len(qa), desc=f"Processing questions for conversation {idx}", leave=False
+                ):
+                    result = self.process_question(question_item, speaker_a_user_id, speaker_b_user_id)
+                    self.results[idx].append(result)
 
-                # Save results after each question is processed
-                with open(self.output_path, "w") as f:
-                    json.dump(self.results, f, indent=4)
+                    # Save results after each question is processed
+                    with open(self.output_path, "w") as f:
+                        json.dump(self.results, f, indent=4)
 
         # Final save at the end
         with open(self.output_path, "w") as f:
             json.dump(self.results, f, indent=4)
 
-    def process_questions_parallel(self, qa_list, speaker_a_user_id, speaker_b_user_id, max_workers=1):
+    def process_questions_parallel(self, idx, qa_list, speaker_a_user_id, speaker_b_user_id, max_workers=10):
+        """Process questions in parallel for a single conversation."""
+
         def process_single_question(val):
-            result = self.process_question(val, speaker_a_user_id, speaker_b_user_id)
-            # Save results after each question is processed
-            with open(self.output_path, "w") as f:
-                json.dump(self.results, f, indent=4)
-            return result
+            # Don't save after each question in parallel mode to avoid file write contention
+            return self.process_question(val, speaker_a_user_id, speaker_b_user_id, save_after=False)
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             results = list(
-                tqdm(executor.map(process_single_question, qa_list), total=len(qa_list), desc="Answering Questions")
+                tqdm(
+                    executor.map(process_single_question, qa_list),
+                    total=len(qa_list),
+                    desc=f"Processing questions for conversation {idx}",
+                    leave=False,
+                )
             )
 
-        # Final save at the end
-        with open(self.output_path, "w") as f:
-            json.dump(self.results, f, indent=4)
+        # Add all results to self.results[idx]
+        self.results[idx].extend(results)
+
+        # Save after processing all questions for this conversation
+        with self._save_lock:
+            with open(self.output_path, "w") as f:
+                json.dump(self.results, f, indent=4)
 
         return results

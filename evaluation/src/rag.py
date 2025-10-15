@@ -12,11 +12,15 @@ from tqdm import tqdm
 
 load_dotenv()
 
+# Configure OpenAI client to use local vLLM server
+VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+VLLM_API_KEY = os.getenv("VLLM_API_KEY", "token-abc123")
+
 PROMPT = """
-# Question: 
+# Question:
 {{QUESTION}}
 
-# Context: 
+# Context:
 {{CONTEXT}}
 
 # Short answer:
@@ -26,7 +30,7 @@ PROMPT = """
 class RAGManager:
     def __init__(self, data_path="dataset/locomo10_rag.json", chunk_size=500, k=1):
         self.model = os.getenv("MODEL")
-        self.client = OpenAI()
+        self.client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
         self.data_path = data_path
         self.chunk_size = chunk_size
         self.k = k
