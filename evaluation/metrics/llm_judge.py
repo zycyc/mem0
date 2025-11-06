@@ -1,6 +1,7 @@
 import argparse
 import json
 import os
+import re
 from collections import defaultdict
 
 import numpy as np
@@ -12,8 +13,8 @@ from mem0.memory.utils import extract_json
 load_dotenv()
 
 # Configure OpenAI client to use local vLLM server
-VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
-VLLM_API_KEY = os.getenv("VLLM_API_KEY", "token-abc123")
+VLLM_BASE_URL = os.getenv("EVALUATOR_BASE_URL", "")
+VLLM_API_KEY = os.getenv("EVALUATOR_API_KEY", "")
 
 client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
 
@@ -44,10 +45,33 @@ Just return the label CORRECT or WRONG in a json format with the key as "label".
 """
 
 
+def extract_label_from_response(content):
+    """Extract label from evaluator response, handling Harmony format and JSON."""
+    # Try to extract from Harmony format first
+    final_pattern = r'<\|channel\|>final.*?<\|message\|>(.*?)(?:<\||$)'
+    match = re.search(final_pattern, content, re.DOTALL)
+    if match:
+        content = match.group(1).strip()
+
+    # Extract JSON from the content
+    json_str = extract_json(content)
+
+    # Try to parse JSON and get label
+    try:
+        data = json.loads(json_str)
+        return data.get("label", "")
+    except json.JSONDecodeError:
+        # If JSON parsing fails, try to find JSON object in the text
+        json_match = re.search(r'\{[^}]*"label"\s*:\s*"([^"]+)"[^}]*\}', content)
+        if json_match:
+            return json_match.group(1)
+        raise
+
+
 def evaluate_llm_judge(question, gold_answer, generated_answer):
     """Evaluate the generated answer against the gold answer using an LLM judge."""
     response = client.chat.completions.create(
-        model=os.getenv("MODEL"),
+        model=os.getenv("EVALUATOR_MODEL"),
         messages=[
             {
                 "role": "user",
@@ -56,10 +80,9 @@ def evaluate_llm_judge(question, gold_answer, generated_answer):
                 ),
             }
         ],
-        response_format={"type": "json_object"},
         temperature=0.0,
     )
-    label = json.loads(extract_json(response.choices[0].message.content))["label"]
+    label = extract_label_from_response(response.choices[0].message.content)
     return 1 if label == "CORRECT" else 0
 
 
