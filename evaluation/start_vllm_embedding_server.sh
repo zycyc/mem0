@@ -2,6 +2,8 @@
 # Start vLLM server with Qwen3-Embedding-0.6B model
 # This script starts an OpenAI-compatible embeddings API server using vLLM
 
+# export CUDA_VISIBLE_DEVICES=4,5,6,7
+
 set -e
 
 # Configuration
@@ -15,16 +17,16 @@ API_KEY="token-abc123"
 GPU_MEMORY_UTILIZATION=0.2  # Small embedding model (~2GB), minimal memory needed
 MAX_MODEL_LEN=8192           # Max sequence length for Qwen3-Embedding
 TENSOR_PARALLEL_SIZE=1       # No tensor parallelism (tiny model fits on 1 GPU)
-DATA_PARALLEL_SIZE=8         # Replicate model across 8 GPUs for maximum throughput
+DATA_PARALLEL_SIZE=8         # Replicate model across 4 GPUs for maximum throughput
 # Total workers = TP * DP = 1 * 8 = 8 independent workers
 
 echo "Starting vLLM embedding server for maximum throughput..."
 echo "Model: $MODEL_NAME"
 echo "Port: $PORT"
 echo "API Key: $API_KEY"
-echo "Configuration: TP=$TENSOR_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE (8 independent workers)"
+echo "Configuration: TP=$TENSOR_PARALLEL_SIZE, DP=$DATA_PARALLEL_SIZE ($DATA_PARALLEL_SIZE independent workers)"
 echo "GPU Memory Utilization: $GPU_MEMORY_UTILIZATION per GPU (~4GB per GPU)"
-echo "Optimization: Data Parallel - model replicated across all 8 GPUs"
+echo "Optimization: Data Parallel - model replicated across $DATA_PARALLEL_SIZE GPUs"
 echo "Task: Embedding (--task embed)"
 echo ""
 

@@ -3,7 +3,7 @@ import pandas as pd
 import argparse
 
 parser = argparse.ArgumentParser(description="Generate scores from evaluation metrics")
-parser.add_argument("--input_file", type=str, default="evaluation_metrics.json", help="Path to the input dataset file")
+parser.add_argument("--input_file", type=str, default="results/rag_500_k1_evaluation_metrics.json", help="Path to the input dataset file")
 args = parser.parse_args()
 
 # Load the evaluation metrics data

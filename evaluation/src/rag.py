@@ -2,19 +2,21 @@ import json
 import os
 import time
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
-import tiktoken
 from dotenv import load_dotenv
 from jinja2 import Template
 from openai import OpenAI
 from tqdm import tqdm
+from transformers import AutoTokenizer
 
 load_dotenv()
 
 # Configure OpenAI client to use local vLLM server
 VLLM_BASE_URL = os.getenv("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "token-abc123")
+VLLM_EMBEDDING_BASE_URL = os.getenv("VLLM_EMBEDDING_BASE_URL", "http://localhost:8001/v1")
 
 PROMPT = """
 # Question:
@@ -31,6 +33,7 @@ class RAGManager:
     def __init__(self, data_path="dataset/locomo10_rag.json", chunk_size=500, k=1):
         self.model = os.getenv("MODEL")
         self.client = OpenAI(base_url=VLLM_BASE_URL, api_key=VLLM_API_KEY)
+        self.embedding_client = OpenAI(base_url=VLLM_EMBEDDING_BASE_URL, api_key=VLLM_API_KEY)
         self.data_path = data_path
         self.chunk_size = chunk_size
         self.k = k
@@ -77,7 +80,7 @@ class RAGManager:
         return cleaned_chat_history
 
     def calculate_embedding(self, document):
-        response = self.client.embeddings.create(model=os.getenv("EMBEDDING_MODEL"), input=document)
+        response = self.embedding_client.embeddings.create(model=os.getenv("EMBEDDING_MODEL"), input=document)
         return response.data[0].embedding
 
     def calculate_similarity(self, embedding1, embedding2):
@@ -117,10 +120,10 @@ class RAGManager:
 
     def create_chunks(self, chat_history, chunk_size=500):
         """
-        Create chunks using tiktoken for more accurate token counting
+        Create chunks using the embedding model's tokenizer for accurate token counting
         """
-        # Get the encoding for the model
-        encoding = tiktoken.encoding_for_model(os.getenv("EMBEDDING_MODEL"))
+        # Get the tokenizer for the model
+        tokenizer = AutoTokenizer.from_pretrained(os.getenv("EMBEDDING_MODEL"))
 
         documents = self.clean_chat_history(chat_history)
 
@@ -130,12 +133,12 @@ class RAGManager:
         chunks = []
 
         # Encode the document
-        tokens = encoding.encode(documents)
+        tokens = tokenizer.encode(documents)
 
         # Split into chunks based on token count
         for i in range(0, len(tokens), chunk_size):
             chunk_tokens = tokens[i : i + chunk_size]
-            chunk = encoding.decode(chunk_tokens)
+            chunk = tokenizer.decode(chunk_tokens)
             chunks.append(chunk)
 
         embeddings = []
@@ -150,13 +153,18 @@ class RAGManager:
             data = json.load(f)
 
         FINAL_RESULTS = defaultdict(list)
-        for key, value in tqdm(data.items(), desc="Processing conversations"):
+
+        # Process conversations in parallel with multiple workers
+        def process_conversation(key_value_pair):
+            key, value = key_value_pair
+            result = defaultdict(list)
+
             chat_history = value["conversation"]
             questions = value["question"]
 
             chunks, embeddings = self.create_chunks(chat_history, self.chunk_size)
 
-            for item in tqdm(questions, desc="Answering questions", leave=False):
+            for item in tqdm(questions, desc=f"Answering questions in conversation {key}", leave=False):
                 question = item["question"]
                 answer = item.get("answer", "")
                 category = item["category"]
@@ -168,7 +176,7 @@ class RAGManager:
                     context, search_time = self.search(question, chunks, embeddings, k=self.k)
                 response, response_time = self.generate_response(question, context)
 
-                FINAL_RESULTS[key].append(
+                result[key].append(
                     {
                         "question": question,
                         "answer": answer,
@@ -179,9 +187,21 @@ class RAGManager:
                         "response_time": response_time,
                     }
                 )
-                with open(output_file_path, "w+") as f:
-                    json.dump(FINAL_RESULTS, f, indent=4)
 
-        # Save results
-        with open(output_file_path, "w+") as f:
-            json.dump(FINAL_RESULTS, f, indent=4)
+            return result
+
+        # Use threads to process conversations in parallel
+        futures = []
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            for item in data.items():
+                futures.append(ex.submit(process_conversation, item))
+            for fut in tqdm(as_completed(futures), total=len(futures), desc="Processing conversations"):
+                result = fut.result()
+
+                # Combine results from the newly completed worker
+                for key, items in result.items():
+                    FINAL_RESULTS[key].extend(items)
+
+                # Save incrementally after each conversation completes
+                with open(output_file_path, "w") as f:
+                    json.dump(FINAL_RESULTS, f, indent=4)

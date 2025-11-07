@@ -188,3 +188,5 @@ qdrant_storage/
 testing.ipynb
 
 test_*.py
+
+*results*.json
