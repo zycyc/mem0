@@ -217,17 +217,15 @@ class LangMemManager:
         # Use multiprocessing to process conversations in parallel
         # Use threads instead of processes (no pickling issues, great for I/O/API bound work)
         futures = []
-        results = []
         with ThreadPoolExecutor(max_workers=10) as ex:
             for item in self.data.items():
                 futures.append(ex.submit(process_conversation, item))
             for fut in tqdm(as_completed(futures), total=len(futures), desc="Processing conversations"):
-                results.append(fut.result())
+                result = fut.result()
 
-                # Combine results from all workers
-                for result in results:
-                    for key, items in result.items():
-                        OUTPUT[key].extend(items)
+                # Combine result from this worker
+                for key, items in result.items():
+                    OUTPUT[key].extend(items)
 
                 # Save final results
                 with open(output_file_path, "w") as f:
