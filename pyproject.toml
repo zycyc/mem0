@@ -12,7 +12,7 @@ authors = [
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-requires-python = ">=3.9,<4.0"
+requires-python = ">=3.10,<4.0"
 dependencies = [
     "qdrant-client>=1.9.1",
     "pydantic>=2.7.3",
@@ -27,6 +27,9 @@ dependencies = [
     "sentence-transformers>=5.1.0",
     "dotenv>=0.9.9",
     "vllm>=0.11.0",
+    "langchain-core>=0.3.76",
+    "langgraph>=1.0.1",
+    "langmem>=0.0.30",
 ]
 
 [project.optional-dependencies]
